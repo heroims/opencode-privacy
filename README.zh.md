@@ -1,21 +1,14 @@
-# opencode-privacy（中文）
+# opencode-privacy
 
-这是一个通过 OpenCode 插件 API 工作的隐私插件，不修改 OpenCode 核心。英文主文档见 [README.md](README.md)。
+面向 [OpenCode](https://opencode.ai/) 的隐私控制和受限凭据操作插件。
 
-## 功能
+[English](README.md) | [简体中文](README.zh.md)
 
-- 检测并脱敏结构化 PII、API Key、Token、JWT、私钥等。
-- 处理消息、系统提示、压缩文本、工具结果，以及 provider 暴露的 `fetch` 请求体。
-- 阻止普通工具把敏感参数发送到外部地址。
-- OpenRouter 请求可加入 `provider.zdr=true` 和 `provider.data_collection="deny"`。
-- TEE 只显示 `tee-unverified`，不会把供应商声明当成密码学验证。
-- 提供 `privacy_http`、`privacy_config_read`、`privacy_config_write` 三个受控工具。
+> 独立社区插件，与 OpenCode 团队没有隶属、背书或官方关联关系。
 
-模型只看到 `secret://<uuid>` 形式的引用。真实值只会在通过授权的操作内部短暂恢复，没有任意“解析密码”工具。
+## 安装
 
-## 按 OpenCode 插件模式安装
-
-发布到 npm 后，OpenCode 会在启动时用 Bun 自动安装插件。在 `opencode.json` 中加入包名：
+OpenCode 会在启动时使用 Bun 自动安装 npm 插件。发布到 npm 后，在 `opencode.json` 中加入：
 
 ```json
 {
@@ -24,9 +17,7 @@
 }
 ```
 
-重启 OpenCode 即可。当前仓库尚未发布到 npm。
-
-开发阶段使用本地构建：
+当前仓库尚未发布到 npm。开发阶段使用本地构建：
 
 ```sh
 npm install
@@ -34,7 +25,7 @@ npm run check
 npm run build
 ```
 
-然后配置绝对路径：
+然后配置构建后的绝对路径：
 
 ```json
 {
@@ -44,37 +35,40 @@ npm run build
 
 OpenCode 也支持 `.opencode/plugins/` 和 `~/.config/opencode/plugins/` 下的本地 JS/TS 插件文件。
 
-## 初始化和保存凭据
+## 快速开始
 
 要求 Node.js `>=22.19.0`。macOS 上执行：
 
 ```sh
 node dist/cli.js init
-node dist/cli.js secret add
-node dist/cli.js secret list
-node dist/cli.js secret remove secret://<uuid>
+node dist/cli.js secret add       # 隐藏输入，只输出 secret://...
+node dist/cli.js serve            # 保持运行
 ```
 
-`secret add` 使用隐藏 TTY 输入，命令行参数中的密码会被拒绝。真实值保存在 macOS Keychain，终端只显示引用。
+在 `~/.config/opencode-privacy/grants.json` 中添加最小权限授权，然后重启 OpenCode。模型只会使用 `secret://<uuid>` 引用，不会收到真实密码。
 
-初始化后会生成：
+## 功能
 
-```text
-~/.config/opencode-privacy/
-├── config.json
-├── grants.json
-└── broker.sock
-```
+### 隐私防护
 
-另开终端启动 broker：
+- 检测并脱敏结构化 PII、API Key、Token、JWT 和私钥。
+- 处理消息、系统提示、压缩内容、工具结果和可见的 provider `fetch` 请求体。
+- 检查 URL、Shell 命令和 `.env`、SSH Key 等敏感文件外发。
+- 支持 PII、工具外发和模型降级策略，并在无法安全判断时阻断。
+- 对实际经过 guarded `fetch` 的 OpenRouter 请求加入 ZDR 参数。
+- 保守报告隐私等级；TEE 只显示 `tee-unverified`。
 
-```sh
-node dist/cli.js serve
-```
+### 受限凭据操作
 
-## 配置策略
+- 使用 macOS Keychain 保存不透明 `secret://<uuid>` 引用。
+- 通过 owner-only Unix socket 运行本地 broker。
+- 将授权绑定到会话、操作、目标、HTTP 方法、请求头和 JSON 字段。
+- 提供 `privacy_http`、`privacy_config_read`、`privacy_config_write`。
+- 检查重定向、私网地址、符号链接、版本冲突和未授权字段。
 
-编辑 `~/.config/opencode-privacy/config.json`：
+## 配置
+
+用户策略文件：`~/.config/opencode-privacy/config.json`。
 
 ```json
 {
@@ -88,25 +82,9 @@ node dist/cli.js serve
 }
 ```
 
-- `piiPolicy`：`off`、`warn`、`redact`、`block`。
-- `toolExfilPolicy`：`off`、`warn`、`block`。
-- `downgradePolicy`：`off`、`warn`、`block`。
-- `piiAllow`：明确允许的 PII 例外；项目配置不能追加。
-- `enforceOpenRouterZdr`：是否给实际经过 guarded `fetch` 的 OpenRouter 请求加入 ZDR 约束。
-- `blockAttachments`：是否拒绝无法安全检查的附件。
+`piiPolicy` 支持 `off`、`warn`、`redact`、`block`；工具外发和降级策略支持 `off`、`warn`、`block`。关闭 PII 检测不会关闭凭据保护。环境变量 `OPENCODE_PRIVACY_CONFIG` 和 `OPENCODE_PRIVACY_BROKER_SOCKET` 可以指定路径。
 
-也可以设置：
-
-```sh
-export OPENCODE_PRIVACY_CONFIG="$HOME/.config/opencode-privacy/config.json"
-export OPENCODE_PRIVACY_BROKER_SOCKET="$HOME/.config/opencode-privacy/broker.sock"
-```
-
-## 配置 grants.json
-
-每条 grant 都绑定精确的 `sessionID`、`operation`、`target` 和 `refs`。
-
-### HTTP 授权
+broker 读取 `~/.config/opencode-privacy/grants.json`。grant 不支持通配符，必须精确指定 `sessionID`、`operation`、`target` 和 `refs`：
 
 ```json
 [
@@ -121,48 +99,24 @@ export OPENCODE_PRIVACY_BROKER_SOCKET="$HOME/.config/opencode-privacy/broker.soc
 ]
 ```
 
-这只允许指定会话对指定 HTTPS origin 发起 `GET`，并且只能在 `authorization` 请求头使用该引用。默认禁止重定向和私网地址；本地测试才使用 `allowHTTPForTests`，可信私网才使用 `allowPrivateNetwork`。
-
-### JSON 配置读写
-
-读写需要分开授权，并限制字段：
-
-```json
-[
-  {
-    "sessionID": "SESSION_ID",
-    "operation": "config.read",
-    "target": "/Users/你/project/config.json",
-    "refs": [],
-    "fields": ["database.password"]
-  },
-  {
-    "sessionID": "SESSION_ID",
-    "operation": "config.write",
-    "target": "/Users/你/project/config.json",
-    "refs": ["secret://xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"],
-    "fields": ["database.password"]
-  }
-]
-```
-
-模型先调用 `privacy_config_read`，取得字段引用和 `version`；再将引用和版本传给 `privacy_config_write`。写入会检查版本、拒绝符号链接并原子替换文件。目标配置文件可能含真实密码，必须按敏感文件保护。
-
-`SESSION_ID` 必须是当前 OpenCode 会话 ID。修改 grants 后重启 broker。
-
-## 使用流程
-
-1. `secret add` 保存凭据并得到 `secret://...`。
-2. 在 `grants.json` 写入最小权限授权。
-3. 启动 `node dist/cli.js serve`。
-4. 在 OpenCode 中加载 `opencode-privacy` npm 插件或本地 `dist/plugin.js`。
-5. 让模型调用 `privacy_config_read`、`privacy_config_write` 或 `privacy_http`。
-6. 目标服务可以收到真实值；模型、普通工具、会话记录和错误信息只看到引用或脱敏结果。
-
-使用 `privacy_status` 查看当前策略、已观察工具、provider 覆盖范围和 broker 连接状态。
+配置文件操作使用单独的 `config.read` 和 `config.write` grant，并列出如 `database.password` 的字段。读取返回 `version`；写入必须携带该版本，并且只能写入凭据引用。
 
 ## 安全边界
 
-这是与 OpenCode 同一用户运行的插件，不能保证抵御恶意同用户插件、任意 shell、恶意 MCP、本机管理员或旧会话文件中的既有明文。任意 shell 恢复凭据和任意远程 MCP 凭据转发明确不支持，并会 fail closed。PII 检测是确定性模式匹配，不是语义识别。
+插件和 broker 与 OpenCode 使用同一用户，无法保证抵御恶意同用户插件、任意 Shell、恶意 MCP、本机管理员或旧会话文件中的既有明文。任意 Shell 恢复凭据和任意远程 MCP 凭据转发明确不支持，并会 fail closed。PII 检测是确定性模式匹配，不是语义识别。
 
 完整覆盖情况见 [docs/coverage.md](docs/coverage.md)。
+
+## 开发
+
+```sh
+npm install
+npm run check
+npm pack --dry-run
+```
+
+测试使用合成凭据和本地 HTTP 服务，验证授权目标能收到原值，而模型内容、broker 错误和审计状态不包含原值。
+
+## 许可证
+
+MIT。移植的 pi-privacy 代码和版权说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
