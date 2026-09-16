@@ -40,3 +40,25 @@ test('package entry exports exactly one plugin initializer for OpenCode legacy l
   const entry=await import('../src/plugin.js');
   assert.deepEqual(Object.keys(entry),['default']);
 });
+
+test('JSON passwords from file output remain masked through history and provider transport', async () => {
+  const hooks=createPrivacyHooks(parseConfig({}));
+  const output={title:'config.json',output:'{"password":"ordinaryPassword123"}',metadata:{}};
+  await hooks['tool.execute.after']!(context,output);
+  assert.ok(!output.output.includes('ordinaryPassword123'));
+  const history:any={messages:[{info:{sessionID:'s'},parts:[{type:'text',text:output.output}]}]};
+  await hooks['experimental.chat.messages.transform']!({},history);
+  let sent='';
+  const host:any={provider:{custom:{options:{fetch:async(req:Request)=>{sent=await req.text();return new Response('{}');}}}}};
+  await hooks.config!(host);
+  await host.provider.custom.options.fetch('https://model.example/v1',{method:'POST',body:JSON.stringify(history)});
+  assert.ok(!sent.includes('ordinaryPassword123'));
+});
+
+test('tool definitions with host-owned schema objects do not abort the session', async () => {
+  const hooks=createPrivacyHooks(parseConfig({}));
+  const parameters=Object.assign(Object.create({hostOwned:true}), {type:'object', properties:{}});
+  const definition:any={description:'safe tool',parameters};
+  await hooks['tool.definition']!({} as any,definition);
+  assert.equal(definition.parameters,parameters);
+});

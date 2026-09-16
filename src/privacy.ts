@@ -1,4 +1,4 @@
-import { detectPii, redactPii, SECRET_TYPES } from './vendor/pi-privacy/pii/detect.js';
+import { redactPii, SECRET_TYPES } from './vendor/pi-privacy/pii/detect.js';
 import { compileAllow } from './vendor/pi-privacy/pii/allow.js';
 import { assessToolCall, sensitiveFileRefs } from './vendor/pi-privacy/ext/toolgate.js';
 import type { PrivacyConfig } from './config.js';
@@ -50,7 +50,20 @@ export class PrivacyEngine {
     return mapJson(value,(text,key)=>{
       if(key && sensitiveKey.test(key) && text && !/^secret:\/\/[a-zA-Z0-9-]+$/.test(text)) return '«credential»';
       // Always redact credentials; a consumer PII allowlist must not bypass them.
-      let out=redactPii(text,SECRET_TYPES);
+      // Tool output is often text containing JSON, rather than a parsed object.
+      // Scan every string token, including standalone array values, so matching
+      // cannot begin at a closing quote. Consume escapes with the whole value.
+      let out=text.replace(/("(?:\\.|[^"\\])*")(?:(\s*:\s*)("(?:\\.|[^"\\])*"))?/g,
+        (match,field:string,separator:string|undefined,encoded:string|undefined)=>{
+          if(encoded===undefined)return match;
+          try {
+            const name:unknown=JSON.parse(field), value:unknown=JSON.parse(encoded);
+            if(typeof name==='string' && sensitiveKey.test(name) && typeof value==='string' && value && !/^secret:\/\/[a-zA-Z0-9-]+$/.test(value))
+              return field+separator+'"«credential»"';
+          } catch { /* Non-JSON text is handled by the assignment rules below. */ }
+          return match;
+        });
+      out=redactPii(out,SECRET_TYPES);
       out=out.replace(/\b(password|passwd|pwd|client_secret|api_key)\s*[:=]\s*(["']?)([^\s"'<>;,]+)\2/gi,(match,name,quote,value:string)=>value.startsWith('secret://')?match:`${name}=«credential»`);
       out=out.replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi,'$1«credential»@');
       if(includePii){out=redactPii(out,undefined,(type,v)=>!SECRET_TYPES.has(type)&&allow(type,v));out=out.replace(/(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)/g,'«cn-phone»');}
@@ -68,7 +81,7 @@ export class PrivacyEngine {
     if(sensitive)state.sensitive=true;
     // Unknown/MCP tools may have a destination hidden in their implementation.
     const risky=!LOCAL.has(name);
-    if(this.config.toolExfilPolicy!=='off' && risky && (sensitive || (assessment.egress && sensitiveFileRefs(raw).length))){
+    if(this.config.toolExfilPolicy!=='off' && risky && (sensitive || (assessment.egress && (assessment.sensitiveFiles?.length || sensitiveFileRefs(raw).length)))){
       state.blocked++;throw new Error('PRIVACY_TOOL_BLOCKED');
     }
   }

@@ -25,6 +25,10 @@
 
 ## 验证记录
 
-本地单元、集成和构建检查：25 项通过（`npm run check`）。`npm pack --dry-run` 成功。
+本地单元、集成和构建检查：31 项通过（`npm run check`）。`npm pack --dry-run` 成功。
+
+2026-09-16 回归验证覆盖带双引号的敏感文件外发、JSON 文本凭据（含转义和数组标点）、凭据快照冲突，以及 OpenCode 宿主传入的非普通 JSON Schema 对象。Keychain 数据读写使用注入的 runner 测试，未操作真实用户 vault；Swift helper 已通过类型检查，原生锁已在临时文件上验证并发拒绝、进程退出释放、权限和符号链接拒绝。随后在真实 macOS 登录钥匙串中使用合成值完成写入、重载、删除和清理。
+
+使用真实 OpenCode 1.18.31 和当前账号配置，在临时项目配置中完成了 `opencode/big-pickle` 与 `opencode/ling-3.0-flash-fin-free` 两次非交互会话。两者均成功加载插件并完成模型请求；Big Pickle 对要求原样重复的 GitHub token 返回了 `«token»`，未返回原值。
 
 OpenCode 1.18.31 隔离宿主烟测未在 90 秒内形成有效 fixture 模型会话，因而没有把宿主端到端集成标为通过；它也没有捕获到模型请求或敏感值外发。需要用实际 OpenCode 配置和可用模型供应商继续验证 provider `fetch` 的运行时接入。

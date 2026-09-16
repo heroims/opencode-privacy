@@ -101,6 +101,8 @@ broker 读取 `~/.config/opencode-privacy/grants.json`。grant 不支持通配�
 
 配置文件操作使用单独的 `config.read` 和 `config.write` grant，并列出如 `database.password` 的字段。读取返回 `version`；写入必须携带该版本，并且只能写入凭据引用。
 
+Keychain 写入使用跨进程锁和快照比较。CLI 修改凭据后请重启 broker；若并发修改导致保存失败，重新运行 CLI 命令，或重启 broker 后重试配置读取。旧快照不会自动覆盖新数据。升级到此版本前应先停止旧版 broker 和 CLI 进程，避免旧版写入绕过锁。锁文件位于 `~/.opencode-privacy-keychain.lock`，运行期间不要删除。
+
 ## 安全边界
 
 插件和 broker 与 OpenCode 使用同一用户，无法保证抵御恶意同用户插件、任意 Shell、恶意 MCP、本机管理员或旧会话文件中的既有明文。任意 Shell 恢复凭据和任意远程 MCP 凭据转发明确不支持，并会 fail closed。PII 检测是确定性模式匹配，不是语义识别。

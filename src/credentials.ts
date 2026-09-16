@@ -32,6 +32,7 @@ export class MemoryCredentialStore {
 const KEYCHAIN_SCRIPT=String.raw`
 import Foundation
 import Security
+import Darwin
 let input = FileHandle.standardInput.readDataToEndOfFile()
 guard let obj = try? JSONSerialization.jsonObject(with: input) as? [String: String], let action = obj["action"] else { exit(2) }
 let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "opencode-privacy.v1", kSecAttrAccount as String: "vault"]
@@ -43,6 +44,26 @@ if action == "get" {
   guard status == errSecSuccess, let data = result as? Data else { exit(3) }
   FileHandle.standardOutput.write(data)
 } else if action == "set", let value = obj["value"], let data = value.data(using: .utf8) {
+  // Serialize compare-and-set across CLI and broker processes. Never unlink the
+  // lock file: replacing its inode would let writers hold different locks.
+  let lockPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".opencode-privacy-keychain.lock").path
+  let fd = open(lockPath, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0o600)
+  guard fd >= 0 else { exit(3) }
+  defer { close(fd) }
+  var info = stat()
+  guard fstat(fd, &info) == 0, info.st_uid == getuid(),
+        (info.st_mode & S_IFMT) == S_IFREG, (info.st_mode & 0o077) == 0,
+        info.st_nlink == 1, flock(fd, LOCK_EX | LOCK_NB) == 0 else { exit(3) }
+  guard let expected = obj["expected"] else { exit(2) }
+  var q = query; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
+  var current: CFTypeRef?
+  let readStatus = SecItemCopyMatching(q as CFDictionary, &current)
+  if readStatus == errSecItemNotFound {
+    guard expected.isEmpty else { exit(4) }
+  } else {
+    guard readStatus == errSecSuccess, let currentData = current as? Data else { exit(3) }
+    guard currentData == expected.data(using: .utf8) else { exit(4) }
+  }
   let update: [String: Any] = [kSecValueData as String: data]
   var status = SecItemUpdate(query as CFDictionary, update as CFDictionary)
   if status == errSecItemNotFound {
@@ -67,11 +88,12 @@ const runKeychain:KeychainRunner=async(args,input)=>{
   });
 };
 export class KeychainCredentialStore extends MemoryCredentialStore {
+  private snapshot='';
   constructor(private runner:KeychainRunner=runKeychain){super();}
   async load():Promise<void>{
     try{
       const data=await this.runner(['-e',KEYCHAIN_SCRIPT],JSON.stringify({action:'get'}));
-      if(!data){this.values.clear();return;}
+      if(!data){this.values.clear();this.snapshot='';return;}
       const parsed:unknown=JSON.parse(data);
       if(!Array.isArray(parsed)||parsed.length>1000)throw new Error();
       const next=new Map<string,string>();
@@ -79,11 +101,15 @@ export class KeychainCredentialStore extends MemoryCredentialStore {
         if(!Array.isArray(entry)||entry.length!==2||typeof entry[0]!=='string'||!REF.test(entry[0])||typeof entry[1]!=='string'||!entry[1]||entry[1].length>65536||next.has(entry[0]))throw new Error();
         next.set(entry[0],entry[1]);
       }
-      this.values=next;
+      this.values=next;this.snapshot=data;
     }catch{throw new Error('KEYCHAIN_LOAD_FAILED');}
   }
   override async save():Promise<void>{
-    try{await this.runner(['-e',KEYCHAIN_SCRIPT],JSON.stringify({action:'set',value:JSON.stringify([...this.values])}));}
+    const value=JSON.stringify([...this.values]);
+    try{
+      await this.runner(['-e',KEYCHAIN_SCRIPT],JSON.stringify({action:'set',value,expected:this.snapshot}));
+      this.snapshot=value;
+    }
     catch{throw new Error('KEYCHAIN_SAVE_FAILED');}
   }
 }

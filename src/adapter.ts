@@ -65,7 +65,14 @@ export function createPrivacyHooks(config:PrivacyConfig,broker?:BrokerClient):Ho
     'experimental.text.complete':async(input,output)=>{output.text=String(await scrub(output.text,input.sessionID));},
     'tool.definition':async(_input,output)=>{
       output.description=String(await scrub(output.description));
-      output.parameters=await scrub(output.parameters);
+      try {
+        output.parameters=await scrub(output.parameters);
+      } catch (error) {
+        // OpenCode may pass a host-owned schema instance/proxy here rather than a
+        // plain JSON object. It contains static tool metadata, not user payload;
+        // preserve it so one non-plain schema cannot abort the whole model turn.
+        if (!(error instanceof Error) || error.message!=='PRIVACY_SHAPE') throw error;
+      }
     },
     'tool.execute.before':async(input,output)=>{
       engine.checkTool(input.sessionID,input.tool,output.args);
