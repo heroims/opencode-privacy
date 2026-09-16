@@ -17,7 +17,7 @@ OpenCode installs npm plugins automatically with Bun at startup. Add the package
 }
 ```
 
-The npm package will be the recommended installation path once published. Until then, install from a checkout:
+For local development from a checkout:
 
 ```sh
 npm install
@@ -108,7 +108,7 @@ Keychain writes use a process lock and snapshot comparison. Restart the broker a
 
 The plugin and broker run as the same user as OpenCode. They cannot guarantee protection from malicious same-user plugins, arbitrary shell programs, malicious MCP servers, local administrators, or secrets already written to old session files. Arbitrary shell credential restoration and arbitrary remote MCP credential forwarding are intentionally unsupported and fail closed.
 
-PII detection is deterministic pattern matching, not semantic classification. Provider `fetch` wrapping only covers requests that OpenCode exposes through that hook. See the [coverage matrix](docs/coverage.md) for supported, partial, and explicitly unsupported functionality.
+PII detection is deterministic pattern matching, not semantic classification. Provider `fetch` wrapping only covers requests that OpenCode exposes through that hook.
 
 ## Development
 

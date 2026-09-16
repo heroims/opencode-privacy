@@ -8,7 +8,7 @@ import { KeychainCredentialStore } from './credentials.js';
 import { OperationEngine, type Grant } from './operations.js';
 import { startBroker, BrokerClient } from './broker.js';
 
-const HELP=`opencode-privacy (Node >=24.15)
+const HELP=`opencode-privacy (Node >=22.19.0)
   init                 Create private user config and empty grants file (no overwrite)
   secret add           Read a secret from hidden terminal input; print only its reference
   secret list          List opaque references, never values

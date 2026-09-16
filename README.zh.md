@@ -17,7 +17,7 @@ OpenCode 会在启动时使用 Bun 自动安装 npm 插件。发布到 npm 后�
 }
 ```
 
-当前仓库尚未发布到 npm。开发阶段使用本地构建：
+本地开发时，使用本地构建：
 
 ```sh
 npm install
@@ -106,8 +106,6 @@ Keychain 写入使用跨进程锁和快照比较。CLI 修改凭据后请重启 
 ## 安全边界
 
 插件和 broker 与 OpenCode 使用同一用户，无法保证抵御恶意同用户插件、任意 Shell、恶意 MCP、本机管理员或旧会话文件中的既有明文。任意 Shell 恢复凭据和任意远程 MCP 凭据转发明确不支持，并会 fail closed。PII 检测是确定性模式匹配，不是语义识别。
-
-完整覆盖情况见 [docs/coverage.md](docs/coverage.md)。
 
 ## 开发
 

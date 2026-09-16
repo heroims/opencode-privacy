@@ -11,14 +11,13 @@
     ".": "./dist/plugin.js"
   },
   "bin": {
-    "opencode-privacy": "./dist/cli.js"
+    "opencode-privacy": "dist/cli.js"
   },
   "files": [
     "dist",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
-    "docs/coverage.md",
     "examples"
   ],
   "scripts": {
