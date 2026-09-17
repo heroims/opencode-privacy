@@ -17,6 +17,17 @@ OpenCode 会在启动时使用 Bun 自动安装 npm 插件。发布到 npm 后�
 }
 ```
 
+当前仓库还没有发布到 npm。在发布前，可以直接使用 Git 仓库：
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-privacy@git+https://github.com/heroims/opencode-privacy.git"]
+}
+```
+
+npm 发布后使用 `"opencode-privacy"` 即可，也可以固定已发布版本，例如 `"opencode-privacy@0.1.0"`。只有未发布的 Git 仓库才需要 `name@git+https://...` 这种写法，和 `superpowers@git+https://github.com/obra/superpowers.git` 相同。
+
 本地开发时，使用本地构建：
 
 ```sh
