@@ -26,8 +26,6 @@ OpenCode 会在启动时使用 Bun 自动安装 npm 插件。发布到 npm 后�
 }
 ```
 
-当前仓库还没有发布到 npm，因此现阶段使用上面的 Git 方式。npm 发布后使用 `"opencode-privacy"` 即可，也可以固定已发布版本，例如 `"opencode-privacy@0.1.0"`。当 npm 包未发布、无法访问或安装失败时，可以使用 `name@git+https://...` 作为备用方式，和 `superpowers@git+https://github.com/obra/superpowers.git` 相同。
-
 本地开发时，使用本地构建：
 
 ```sh
