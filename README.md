@@ -17,7 +17,7 @@ OpenCode installs npm plugins automatically with Bun at startup. Add the package
 }
 ```
 
-The package is not published to npm yet. Until then, install the repository directly from Git:
+If the npm registry cannot be reached or the npm package install fails, and GitHub is reachable, install the repository directly from Git:
 
 ```json
 {
@@ -26,7 +26,7 @@ The package is not published to npm yet. Until then, install the repository dire
 }
 ```
 
-After an npm release, use `"opencode-privacy"` (or pin a published version such as `"opencode-privacy@0.1.0"`). The `name@git+https://...` form is needed only for an unpublished Git checkout, as with `superpowers@git+https://github.com/obra/superpowers.git`.
+The repository is not published to npm yet, so the Git form is currently the fallback for this project. After an npm release, use `"opencode-privacy"` (or pin a published version such as `"opencode-privacy@0.1.0"`). The `name@git+https://...` form is the fallback for an unpublished or unreachable npm package, as with `superpowers@git+https://github.com/obra/superpowers.git`.
 
 For local development from a checkout:
 
