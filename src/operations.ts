@@ -17,13 +17,50 @@ const object=(v:unknown):Record<string,unknown>=>{if(!v||typeof v!=='object'||Ar
 const text=(v:unknown):string=>{if(typeof v!=='string')throw new Error('DENIED');return v;};
 const fields=(v:unknown):string[]=>{if(!Array.isArray(v)||!v.length||v.length>100||v.some(x=>typeof x!=='string'||!x||x.split('.').some((s:string)=>!s||['__proto__','constructor','prototype'].includes(s))))throw new Error('DENIED');return v as string[];};
 const digest=(s:string)=>createHash('sha256').update(s).digest('hex');
+function validateGrant(value:unknown):Grant {
+  const fail=():never=>{throw new Error('INVALID_GRANTS');};
+  if(!value||typeof value!=='object'||Array.isArray(value))return fail();
+  const g=value as Record<string,unknown>;
+  if(typeof g.sessionID!=='string'||!g.sessionID.trim()||g.sessionID.length>256||
+    typeof g.target!=='string'||!['http','config.read','config.write'].includes(String(g.operation)))return fail();
+  const http=g.operation==='http';
+  const keys=http?['sessionID','operation','target','refs','methods','headers','allowPrivateNetwork','allowHTTPForTests']:['sessionID','operation','target','refs','fields'];
+  if(Object.keys(g).some(key=>!keys.includes(key)))return fail();
+  const strings=(v:unknown,check:(s:string)=>boolean):string[]=>{
+    if(!Array.isArray(v)||v.length>1000||v.some(x=>typeof x!=='string'||!check(x))||new Set(v).size!==v.length)return fail();
+    return [...v] as string[];
+  };
+  const refs=strings(g.refs,s=>REF.test(s));
+  const result:Grant={sessionID:g.sessionID,operation:g.operation as Grant['operation'],target:g.target,refs};
+  if(http){
+    let url:URL;try{url=new URL(g.target);}catch{return fail();}
+    if(!['http:','https:'].includes(url.protocol)||url.origin!==g.target||url.username||url.password)return fail();
+    result.methods=strings(g.methods,s=>/^[A-Z]+$/.test(s));
+    result.headers=strings(g.headers??[],s=>/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(s));
+    if(!result.methods.length)return fail();
+    for(const key of ['allowPrivateNetwork','allowHTTPForTests'] as const){
+      if(g[key]!==undefined){if(typeof g[key]!=='boolean')return fail();result[key]=g[key];}
+    }
+  }else{
+    if(!isAbsolute(g.target)||resolve(g.target)!==g.target)return fail();
+    try{result.fields=[...fields(g.fields)];}catch{return fail();}
+    if(new Set(result.fields).size!==result.fields.length)return fail();
+  }
+  for(const list of [result.refs,result.methods,result.headers,result.fields])if(list)Object.freeze(list);
+  return Object.freeze(result);
+}
 const blocked=new BlockList();
 for(const [address,prefix]of [['0.0.0.0',8],['10.0.0.0',8],['100.64.0.0',10],['127.0.0.0',8],['169.254.0.0',16],['172.16.0.0',12],['192.168.0.0',16],['192.0.0.0',24],['198.18.0.0',15],['224.0.0.0',4],['240.0.0.0',4]] as const)blocked.addSubnet(address,prefix,'ipv4');
 for(const [address,prefix]of [['::',128],['::1',128],['fc00::',7],['fe80::',10],['ff00::',8]] as const)blocked.addSubnet(address,prefix,'ipv6');
 export class OperationEngine {
   private locks=new Set<string>();
-  constructor(readonly store:MemoryCredentialStore,readonly grants:Grant[]){
-    for(const g of grants){if(!g.sessionID||!['http','config.read','config.write'].includes(g.operation)||typeof g.target!=='string'||!Array.isArray(g.refs)||g.refs.some(r=>!REF.test(r)))throw new Error('INVALID_GRANTS');}
+  readonly grants:readonly Grant[];
+  constructor(readonly store:MemoryCredentialStore,grants:Grant[]){
+    if(!Array.isArray(grants)||grants.length>1000)throw new Error('INVALID_GRANTS');
+    const validated=grants.map(validateGrant);
+    const identities=validated.map(g=>JSON.stringify([g.sessionID,g.operation,g.target]));
+    if(new Set(identities).size!==identities.length)throw new Error('INVALID_GRANTS');
+    this.grants=Object.freeze(validated);
   }
   scrub(value:unknown){return this.store.scrub(value);}
   status(){return {credentials:this.store.references().length,grants:this.grants.length,scope:'same-user trusted runtime; not an OS sandbox'};}
@@ -36,7 +73,7 @@ export class OperationEngine {
       const args=object(input);const url=new URL(text(args.url));const method=args.method===undefined?'GET':text(args.method).toUpperCase();
       if(url.username||url.password||url.hash||url.href.includes('secret:')||url.href.includes('secret%3A'))throw new Error('DENIED');
       const g=this.grant(session,'http',url.origin);
-      if(url.protocol!=='https:'&&!(url.protocol==='http:'&&g.allowHTTPForTests))throw new Error('DENIED');
+      if(url.protocol!=='https:'&&!(url.protocol==='http:'&&g.allowHTTPForTests===true))throw new Error('DENIED');
       if(!g.methods?.includes(method))throw new Error('DENIED');
       const headers:Record<string,string>={};
       for(const [key,value]of Object.entries(args.headers===undefined?{}:object(args.headers))){
@@ -50,7 +87,7 @@ export class OperationEngine {
       if(this.store.scrub(url.href)!==url.href)throw new Error('DENIED');
       const host=url.hostname.replace(/^\[|\]$/g,'');
       const addresses=isIP(host)?[{address:host,family:isIP(host)}]:await lookup(host,{all:true});
-      if(!addresses.length||(!g.allowPrivateNetwork&&addresses.some(x=>blocked.check(x.address,x.family===6?'ipv6':'ipv4'))))throw new Error('DENIED');
+      if(!addresses.length||(g.allowPrivateNetwork!==true&&addresses.some(x=>blocked.check(x.address,x.family===6?'ipv6':'ipv4'))))throw new Error('DENIED');
       const chosen=addresses[0]!;
       // Pin the validated lookup result for this connection; no DNS re-resolution.
       const result=await new Promise<{status:number;body:string}>((resolveResult,reject)=>{

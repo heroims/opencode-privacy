@@ -2,17 +2,20 @@ import { redactPii, SECRET_TYPES } from './vendor/pi-privacy/pii/detect.js';
 import { compileAllow } from './vendor/pi-privacy/pii/allow.js';
 import { assessToolCall, sensitiveFileRefs } from './vendor/pi-privacy/ext/toolgate.js';
 import type { PrivacyConfig } from './config.js';
+import { sensitiveName, redactCredentialText } from './secrets.js';
 
-const sensitiveKey = /^(?:password|passwd|pwd|secret|token|api[_-]?key|authorization|private[_-]?key|client[_-]?secret)$/i;
 const reference = /secret:\/\/[a-zA-Z0-9-]+/;
+const completeReference=/^secret:\/\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+const referenceSpans=/secret:\/\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}(?![a-zA-Z0-9-])/g;
 const LOCAL = new Set(['read','grep','glob','list','ls','edit','write','apply_patch']);
 export const SECURE_TOOLS = new Set(['privacy_http','privacy_config_read','privacy_config_write']);
 
 // Traversal does not stringify arbitrary objects or invoke their toJSON methods.
-export function mapJson(value: unknown, transform: (text:string,key?:string)=>string): unknown {
+export function mapJson(value: unknown, transform: (text:string,key?:string)=>string, fieldMask?:(key:string,value:unknown)=>string|undefined): unknown {
   const seen = new Set<object>(); let count = 0;
   function walk(v: unknown, depth:number, key?:string):unknown {
     if (++count > 50000 || depth > 50) throw new Error('PRIVACY_SHAPE');
+    if(key!==undefined){const masked=fieldMask?.(key,v);if(masked!==undefined)return masked;}
     if (typeof v === 'string') { if(v.length>4_000_000) throw new Error('PRIVACY_SIZE'); return transform(v,key); }
     if (v === null || v === undefined || typeof v === 'boolean' || typeof v === 'number') return v;
     if (typeof v !== 'object' || seen.has(v)) throw new Error('PRIVACY_SHAPE');
@@ -43,32 +46,83 @@ export class PrivacyEngine {
     return s;
   }
   forget(session:string){this.sessions.delete(session);}
-  note(session:string,value:unknown){ if(this.scrub(value,true)!==value && JSON.stringify(this.scrub(value,true))!==JSON.stringify(value)) this.state(session).sensitive=true; }
+  markSensitive(session:string){this.state(session).sensitive=true;}
+  note(session:string,value:unknown){
+    const clean=this.scrub(value,true);
+    if(JSON.stringify(clean)!==JSON.stringify(value)||reference.test(JSON.stringify(value)??''))this.markSensitive(session);
+  }
   hasSensitive(session:string){return this.state(session).sensitive;}
-  scrub(value:unknown, includePii = this.config.piiPolicy !== 'off'): unknown {
+  scrub(value:unknown, includePii = this.config.piiPolicy !== 'off', sensitiveFields=true): unknown {
     const allow = compileAllow(this.config.piiAllow);
-    return mapJson(value,(text,key)=>{
-      if(key && sensitiveKey.test(key) && text && !/^secret:\/\/[a-zA-Z0-9-]+$/.test(text)) return '«credential»';
+    const maskField=(key:string,v:unknown):string|undefined=>{
+      if(sensitiveFields&&sensitiveName(key)&&v!==null&&v!==undefined&&v!==''&&!(typeof v==='string'&&completeReference.test(v)))return '«credential»';
+      return undefined;
+    };
+    const scrubText=(text:string,skipPairs=false):string=>{
+      // Decode complete JSON documents before inspecting fields, including numbers
+      // and containers. Keep unchanged documents byte-for-byte intact.
+      if(/^[\s]*[\[{]/.test(text)){
+        let parsed:unknown;let json=false;try{parsed=JSON.parse(text);json=true;}catch{}
+        if(json){const clean=mapJson(parsed,(s,key)=>scrubText(s,key===undefined),maskField);return JSON.stringify(clean)===JSON.stringify(parsed)?text:JSON.stringify(clean);}
+      }
+      // Inspect complete credential values before splitting reference spans.
+      text=scrubCredentials(text,skipPairs);
+      // Protect only complete reference spans; continue scanning adjacent text.
+      let out='';let start=0;
+      for(const match of text.matchAll(referenceSpans)){
+        out+=scrubSegment(text.slice(start,match.index),skipPairs)+match[0];start=match.index!+match[0].length;
+      }
+      return out+scrubSegment(text.slice(start),skipPairs);
+    };
+    const scrubCredentials=(text:string,skipPairs=false):string=>{
       // Always redact credentials; a consumer PII allowlist must not bypass them.
       // Tool output is often text containing JSON, rather than a parsed object.
       // Scan every string token, including standalone array values, so matching
       // cannot begin at a closing quote. Consume escapes with the whole value.
-      let out=text.replace(/("(?:\\.|[^"\\])*")(?:(\s*:\s*)("(?:\\.|[^"\\])*"))?/g,
+      // A decoded array string is data, not a sibling JSON field declaration.
+      // Complete nested JSON documents are handled above; do not reinterpret
+      // bare quoted punctuation in an array as another object's credential.
+      let out=skipPairs?text:text.replace(/("(?:\\.|[^"\\])*")(?:(\s*:\s*)("(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null))?/g,
         (match,field:string,separator:string|undefined,encoded:string|undefined)=>{
           if(encoded===undefined)return match;
           try {
             const name:unknown=JSON.parse(field), value:unknown=JSON.parse(encoded);
-            if(typeof name==='string' && sensitiveKey.test(name) && typeof value==='string' && value && !/^secret:\/\/[a-zA-Z0-9-]+$/.test(value))
+            if(typeof name==='string' && maskField(name,value)!==undefined)
               return field+separator+'"«credential»"';
           } catch { /* Non-JSON text is handled by the assignment rules below. */ }
           return match;
         });
-      out=redactPii(out,SECRET_TYPES);
-      out=out.replace(/\b(password|passwd|pwd|client_secret|api_key)\s*[:=]\s*(["']?)([^\s"'<>;,]+)\2/gi,(match,name,quote,value:string)=>value.startsWith('secret://')?match:`${name}=«credential»`);
-      out=out.replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi,'$1«credential»@');
-      if(includePii){out=redactPii(out,undefined,(type,v)=>!SECRET_TYPES.has(type)&&allow(type,v));out=out.replace(/(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)/g,'«cn-phone»');}
+      return redactCredentialText(out);
+    };
+    const scrubSegment=(text:string,_skipPairs=false):string=>{
+      let out=redactPii(text,SECRET_TYPES);
+      if(includePii){out=redactPii(out,undefined,(type,v)=>!SECRET_TYPES.has(type)&&allow(type,v));out=out.replace(/(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)/g,match=>allow('phone',match)?match:'«cn-phone»');}
       return out;
-    });
+    };
+    return mapJson(value,text=>scrubText(text),maskField);
+  }
+  scrubSchema(value:unknown):unknown {
+    const clean=this.scrub(value,this.config.piiPolicy!=='off',false);
+    const instance=(v:unknown,property?:string)=>this.scrub(property?{[property]:v}:v);
+    function unwrap(v:unknown,property?:string):unknown{return property?(v as Record<string,unknown>)[property]:v;}
+    const walk=(v:unknown,property?:string):unknown=>{
+      if(Array.isArray(v))return v.map(x=>walk(x,property));
+      if(!v||typeof v!=='object')return v;
+      const result:Record<string,unknown>={};
+      for(const [key,child] of Object.entries(v)){
+        let next:unknown;
+        if(['default','const','enum','examples','example'].includes(key))next=(key==='enum'||key==='examples')&&Array.isArray(child)
+          ?child.map(item=>unwrap(instance(item,property),property)):unwrap(instance(child,property),property);
+        else if(key==='properties'&&child&&typeof child==='object'&&!Array.isArray(child)){
+          const properties:Record<string,unknown>={};
+          for(const [name,schema]of Object.entries(child))Object.defineProperty(properties,name,{value:walk(schema,name),enumerable:true,writable:true,configurable:true});
+          next=properties;
+        }else next=walk(child,property);
+        Object.defineProperty(result,key,{value:next,enumerable:true,writable:true,configurable:true});
+      }
+      return result;
+    };
+    return walk(clean);
   }
   checkTool(session:string,name:string,args:unknown):void {
     const state=this.state(session);state.tools.add(name.replace(/[^\w.-]/g,'?').slice(0,100));

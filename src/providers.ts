@@ -1,6 +1,6 @@
 import { isLocalEndpoint } from './vendor/pi-privacy/providers/catalog.js';
 import { openRouterZdrPatch, veniceRequestPatch } from './vendor/pi-privacy/ext/patches.js';
-export type Posture = {tier:'standard'|'loopback'|'tee-unverified'|'zdr-policy'|'zdr-enforced';evidence:string};
+export type Posture = {tier:'standard'|'loopback'|'tee-unverified'|'zdr-policy'|'zdr-required'|'zdr-enforced';evidence:string};
 export function providerPosture(provider:string,baseURL?:string,zdrObserved=false):Posture {
   let host='';try{host=new URL(baseURL??'').hostname;}catch{}
   if(isLocalEndpoint(baseURL))return {tier:'loopback',evidence:'Loopback endpoint observed; may forward remotely. Credentials remain masked.'};
@@ -9,7 +9,7 @@ export function providerPosture(provider:string,baseURL?:string,zdrObserved=fals
   if((provider==='venice'&&host==='api.venice.ai')||(provider==='privateer'&&host==='api.privateer.pro'))return {tier:'zdr-policy',evidence:'Upstream catalog policy claim; not independently verified.'};
   return {tier:'standard',evidence:'No verified data retention or execution guarantee.'};
 }
-const rank:Record<Posture['tier'],number>={standard:0,loopback:0,'tee-unverified':0,'zdr-policy':1,'zdr-enforced':2};
+const rank:Record<Posture['tier'],number>={standard:0,loopback:0,'tee-unverified':0,'zdr-policy':1,'zdr-required':2,'zdr-enforced':2};
 export function checkDowngrade(previous:Posture|undefined,next:Posture,sensitive:boolean,policy:'off'|'warn'|'block'):void {
   if(sensitive&&previous&&rank[next.tier]<rank[previous.tier]&&policy!=='off')throw new Error('PRIVACY_DOWNGRADE');
 }

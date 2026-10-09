@@ -108,6 +108,8 @@ broker 读取 `~/.config/opencode-privacy/grants.json`。grant 不支持通配�
 ]
 ```
 
+grant 列表及操作专属字段在启动前严格校验。网络例外必须是 JSON 布尔值，`"false"` 等字符串会被拒绝。同一会话、操作和目标不能配置重复 grant，请将权限合并到一条授权中。
+
 配置文件操作使用单独的 `config.read` 和 `config.write` grant，并列出如 `database.password` 的字段。读取返回 `version`；写入必须携带该版本，并且只能写入凭据引用。
 
 Keychain 写入使用跨进程锁和快照比较。CLI 修改凭据后请重启 broker；若并发修改导致保存失败，重新运行 CLI 命令，或重启 broker 后重试配置读取。旧快照不会自动覆盖新数据。升级到此版本前应先停止旧版 broker 和 CLI 进程，避免旧版写入绕过锁。锁文件位于 `~/.opencode-privacy-keychain.lock`，运行期间不要删除。
@@ -129,3 +131,5 @@ npm pack --dry-run
 ## 许可证
 
 MIT。移植的 pi-privacy 代码和版权说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+凭据保护保留完整 `secret://` 引用与 JSON Schema 声明，同时清洗 examples 和 default 中的真实凭据值。会话的 `zdr-required` 表示要求使用配置的 OpenRouter 受保护请求路径；provider 级请求观测不证明该会话的推理执行。

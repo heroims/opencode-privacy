@@ -8,13 +8,25 @@ export function createPrivacyHooks(config:PrivacyConfig,broker?:BrokerClient):Ho
   const engine=new PrivacyEngine(config);
   const transports=new Map<string,{origin?:string;zdr:boolean;requests:number}>();
   const sessionPostures=new Map<string,Posture>();
-  async function scrub(value:unknown,session?:string):Promise<unknown>{
+  async function scrub(value:unknown,session?:string,sensitiveFields:boolean|'schema'=true):Promise<unknown>{
     if(session)engine.note(session,value);
     let masked=value;
     if(broker){try{masked=await broker.scrub(value);}catch{throw new Error('PRIVACY_BROKER_UNAVAILABLE');}}
-    const clean=engine.scrub(masked);
+    if(session&&JSON.stringify(masked)!==JSON.stringify(value))engine.markSensitive(session);
+    const clean=sensitiveFields==='schema'?engine.scrubSchema(masked):engine.scrub(masked,config.piiPolicy!=='off',sensitiveFields);
     if(config.piiPolicy==='block'&&JSON.stringify(value)!==JSON.stringify(clean))throw new Error('PRIVACY_CONTENT_BLOCKED');
     // warn uses safe unattended behavior: redact, never silently release originals.
+    return clean;
+  }
+  async function scrubTool(value:unknown):Promise<unknown>{
+    if(!value||typeof value!=='object'||Array.isArray(value))return scrub(value);
+    const {parameters,input_schema,function:fn,functionDeclarations,...metadata}=value as Record<string,unknown>;
+    const clean=await scrub(metadata) as Record<string,unknown>;
+    if(parameters!==undefined)clean.parameters=await scrub(parameters,undefined,'schema');
+    if(input_schema!==undefined)clean.input_schema=await scrub(input_schema,undefined,'schema');
+    if(fn!==undefined)clean.function=await scrubTool(fn);
+    if(functionDeclarations!==undefined)clean.functionDeclarations=Array.isArray(functionDeclarations)
+      ?await Promise.all(functionDeclarations.map(scrubTool)):await scrub(functionDeclarations);
     return clean;
   }
   function checkMedia(value:unknown):void {
@@ -47,7 +59,16 @@ export function createPrivacyHooks(config:PrivacyConfig,broker?:BrokerClient):Ho
         const state={origin:undefined as string|undefined,zdr:false,requests:0};transports.set(id,state);
         opts.fetch=guardedFetch({provider:id,enforceZdr:id==='openrouter'&&config.enforceOpenRouterZdr,
           fetch:opts.fetch as typeof fetch|undefined,
-          scrub:async body=>{checkMedia(body);return scrub(body);},
+          scrub:async body=>{
+            checkMedia(body);
+            // Preserve schema declarations while inspecting instance examples
+            // and defaults with ordinary contextual credential rules.
+            if(body&&typeof body==='object'&&!Array.isArray(body)&&Array.isArray((body as Record<string,unknown>).tools)){
+              const {tools,...content}=body as Record<string,unknown>;
+              return {...await scrub(content) as Record<string,unknown>,tools:await Promise.all((tools as unknown[]).map(scrubTool))};
+            }
+            return scrub(body);
+          },
           observed:(origin,zdr)=>{state.origin=origin;state.zdr=zdr;state.requests++;},
         });
       }
@@ -66,7 +87,7 @@ export function createPrivacyHooks(config:PrivacyConfig,broker?:BrokerClient):Ho
     'tool.definition':async(_input,output)=>{
       output.description=String(await scrub(output.description));
       try {
-        output.parameters=await scrub(output.parameters);
+        output.parameters=await scrub(output.parameters,undefined,'schema');
       } catch (error) {
         // OpenCode may pass a host-owned schema instance/proxy here rather than a
         // plain JSON object. It contains static tool metadata, not user payload;
@@ -78,13 +99,14 @@ export function createPrivacyHooks(config:PrivacyConfig,broker?:BrokerClient):Ho
       engine.checkTool(input.sessionID,input.tool,output.args);
       if(!SECURE_TOOLS.has(input.tool)&&broker){
         let clean:unknown;try{clean=await broker.scrub(output.args);}catch{throw new Error('PRIVACY_BROKER_UNAVAILABLE');}
-        if(JSON.stringify(clean)!==JSON.stringify(output.args))throw new Error('PRIVACY_TOOL_BLOCKED');
+        if(JSON.stringify(clean)!==JSON.stringify(output.args)){engine.markSensitive(input.sessionID);throw new Error('PRIVACY_TOOL_BLOCKED');}
       }
     },
     'tool.execute.after':async(input,output)=>{
       if(!output)return;
       checkMedia(output);
       const clean=await scrub(output,input.sessionID) as typeof output;
+      for(const key of Object.keys(output))if(!Object.hasOwn(clean,key))delete (output as Record<string,unknown>)[key];
       Object.assign(output,clean);
     },
     'chat.params':async(input)=>{
@@ -92,9 +114,17 @@ export function createPrivacyHooks(config:PrivacyConfig,broker?:BrokerClient):Ho
       const observed=transports.get(id);
       const configured=input.provider.options?.baseURL;
       const base=typeof configured==='string'?configured:input.model.api.url;
-      const next=providerPosture(id,base,Boolean(observed?.zdr&&observed.origin===new URL(base).origin));
+      // Transport observations are provider-wide. A session's required policy
+      // must exist before its first request, and must not borrow another
+      // session's observation as proof of its own inference request.
+      let next=providerPosture(id,base);
+      if(config.enforceOpenRouterZdr&&id==='openrouter'){
+        let origin:string;try{origin=new URL(base).origin;}catch{throw new Error('PRIVACY_PROVIDER_TARGET');}
+        if(!observed)throw new Error('PRIVACY_ZDR_UNAVAILABLE');
+        if(origin!=='https://openrouter.ai')throw new Error('PRIVACY_PROVIDER_TARGET');
+        next={tier:'zdr-required',evidence:'ZDR constraints required on the configured guarded fetch path. Provider-wide observations are reported separately; no session-bound inference verification.'};
+      }
       checkDowngrade(sessionPostures.get(input.sessionID),next,engine.hasSensitive(input.sessionID),config.downgradePolicy);
-      if(config.enforceOpenRouterZdr&&id==='openrouter'&&!observed)throw new Error('PRIVACY_ZDR_UNAVAILABLE');
       sessionPostures.set(input.sessionID,next);
     },
     event:async({event})=>{

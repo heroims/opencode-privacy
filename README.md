@@ -109,6 +109,8 @@ The broker reads `~/.config/opencode-privacy/grants.json`. Grants are exact and 
 ]
 ```
 
+Grant lists and operation-specific fields are validated before startup. Network exceptions require actual JSON booleans; strings such as `"false"` are rejected. Duplicate session/operation/target grants are rejected; combine their permissions into one grant.
+
 For configuration files, use separate `config.read` and `config.write` grants with exact dotted fields such as `database.password`. `privacy_config_read` returns a version; `privacy_config_write` requires that version and accepts only references.
 
 Keychain writes use a process lock and snapshot comparison. Restart the broker after changing credentials with the CLI. If concurrent changes cause a save to fail, rerun the CLI command or restart the broker before retrying a configuration read. Stale snapshots never automatically overwrite newer data. Stop older broker and CLI processes before upgrading, since older writers do not participate in locking. Do not delete `~/.opencode-privacy-keychain.lock` while processes are running.
@@ -132,3 +134,5 @@ The test suite uses synthetic credentials and local HTTP servers. It verifies th
 ## License
 
 MIT. Vendored pi-privacy code and notices are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Credential protection preserves complete `secret://` references and JSON Schema declarations while scrubbing credential values in examples and defaults. A session marked `zdr-required` requires the configured guarded OpenRouter path; provider-wide request observations do not prove that session’s inference execution.
