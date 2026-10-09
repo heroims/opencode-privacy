@@ -1,6 +1,6 @@
 {
   "name": "opencode-privacy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Privacy controls and scoped credential operations for OpenCode",
   "type": "module",
   "license": "MIT",
